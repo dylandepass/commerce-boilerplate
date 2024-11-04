@@ -8,12 +8,8 @@ import ProductDetails from '@dropins/storefront-pdp/containers/ProductDetails.js
 
 // Libs
 import {
-  getProduct,
-  getSkuFromUrl,
-  setJsonLd,
   loadErrorPage,
 } from '../../scripts/commerce.js';
-import { getConfigValue } from '../../scripts/configs.js';
 import { fetchPlaceholders } from '../../scripts/aem.js';
 
 async function addToCart({
@@ -24,91 +20,10 @@ async function addToCart({
   return cartApi.addToCart(sku, optionsUIDs, quantity, product);
 }
 
-async function setJsonLdProduct(product) {
-  const {
-    name, inStock, description, sku, urlKey, price, priceRange, images, attributes,
-  } = product;
-  const amount = priceRange?.minimum?.final?.amount || price?.final?.amount;
-  const brand = attributes.find((attr) => attr.name === 'brand');
-
-  setJsonLd({
-    '@context': 'http://schema.org',
-    '@type': 'Product',
-    name,
-    description,
-    image: images[0]?.url,
-    offers: [{
-      '@type': 'http://schema.org/Offer',
-      price: amount?.value,
-      priceCurrency: amount?.currency,
-      availability: inStock ? 'http://schema.org/InStock' : 'http://schema.org/OutOfStock',
-    }],
-    productID: sku,
-    brand: {
-      '@type': 'Brand',
-      name: brand?.value,
-    },
-    url: new URL(`/products/${urlKey}/${sku}`, window.location),
-    sku,
-    '@id': new URL(`/products/${urlKey}/${sku}`, window.location),
-  }, 'product');
-}
-
-function createMetaTag(property, content, type) {
-  if (!property || !type) {
-    return;
-  }
-  let meta = document.head.querySelector(`meta[${type}="${property}"]`);
-  if (meta) {
-    if (!content) {
-      meta.remove();
-      return;
-    }
-    meta.setAttribute(type, property);
-    meta.setAttribute('content', content);
-    return;
-  }
-  if (!content) {
-    return;
-  }
-  meta = document.createElement('meta');
-  meta.setAttribute(type, property);
-  meta.setAttribute('content', content);
-  document.head.appendChild(meta);
-}
-
-function setMetaTags(product) {
-  if (!product) {
-    return;
-  }
-
-  const price = product.priceRange
-    ? product.priceRange.minimum.final.amount : product.price.final.amount;
-
-  createMetaTag('title', product.metaTitle, 'name');
-  createMetaTag('description', product.metaDescription, 'name');
-  createMetaTag('keywords', product.metaKeyword, 'name');
-
-  createMetaTag('og:type', 'og:product', 'property');
-  createMetaTag('og:description', product.shortDescription, 'property');
-  createMetaTag('og:title', product.metaTitle, 'property');
-  createMetaTag('og:url', window.location.href, 'property');
-  const mainImage = product?.images?.filter((image) => image.roles.includes('thumbnail'))[0];
-  const metaImage = mainImage?.url || product?.images[0]?.url;
-  createMetaTag('og:image', metaImage, 'property');
-  createMetaTag('og:image:secure_url', metaImage, 'property');
-  createMetaTag('og:product:price:amount', price.value, 'property');
-  createMetaTag('og:product:price:currency', price.currency, 'property');
-}
-
 export default async function decorate(block) {
-  if (!window.getProductPromise) {
-    window.getProductPromise = getProduct(this.props.sku);
-  }
+  const placeholders = await fetchPlaceholders();
 
-  const [product, placeholders] = await Promise.all([
-    window.getProductPromise, fetchPlaceholders()]);
-
+  const { product } = window;
   if (!product) {
     await loadErrorPage();
     return Promise.reject();
@@ -165,28 +80,34 @@ export default async function decorate(block) {
     models,
   });
 
-  // Set Fetch Endpoint (Service)
-  productApi.setEndpoint(await getConfigValue('commerce-endpoint'));
-
-  // Set Fetch Headers (Service)
-  productApi.setFetchGraphQlHeaders({
-    'Content-Type': 'application/json',
-    'Magento-Environment-Id': await getConfigValue('commerce-environment-id'),
-    'Magento-Website-Code': await getConfigValue('commerce-website-code'),
-    'Magento-Store-View-Code': await getConfigValue('commerce-store-view-code'),
-    'Magento-Store-Code': await getConfigValue('commerce-store-code'),
-    'Magento-Customer-Group': await getConfigValue('commerce-customer-group'),
-    'x-api-key': await getConfigValue('commerce-x-api-key'),
-  });
-
   events.on('eds/lcp', () => {
     if (!product) {
       return;
     }
 
-    setJsonLdProduct(product);
-    setMetaTags(product);
     document.title = product.name;
+    window.adobeDataLayer.push((dl) => {
+      dl.push({
+        productContext: {
+          productId: parseInt(product.externalId, 10) || 0,
+          ...product,
+        },
+      });
+      dl.push({ event: 'product-page-view', eventInfo: { ...dl.getState() } });
+    });
+
+    document.querySelectorAll('.dropin-picker__select').forEach((select) => {
+      const newElement = select.cloneNode(true);
+      select.parentNode.replaceChild(newElement, select);
+
+      newElement.addEventListener('change', (event) => {
+        const { value } = event.target;
+        const url = new URL(window.location);
+
+        url.searchParams.set('optionUIDs', value);
+        window.history.replaceState({}, '', url);
+      });
+    });
   }, { eager: true });
 
   // Render Containers
@@ -194,7 +115,7 @@ export default async function decorate(block) {
     setTimeout(async () => {
       try {
         await productRenderer.render(ProductDetails, {
-          sku: getSkuFromUrl(),
+          sku: product.sku,
           carousel: {
             controls: {
               desktop: 'thumbnailsColumn',

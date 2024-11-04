@@ -20,7 +20,9 @@ import {
   loadCSS,
   sampleRUM,
 } from './aem.js';
-import { getProduct, getSkuFromUrl, trackHistory } from './commerce.js';
+import {
+  getProduct, getSkuFromUrl, trackHistory, extractProductPageData,
+} from './commerce.js';
 import initializeDropins from './dropins.js';
 
 const AUDIENCES = {
@@ -140,16 +142,26 @@ async function loadEager(doc) {
   window.adobeDataLayer = window.adobeDataLayer || [];
 
   let pageType = 'CMS';
-  if (document.body.querySelector('main .product-details')) {
+  const main = doc.querySelector('main');
+  const productSku = doc.querySelector('meta[name="sku"]');
+  if (productSku) {
     pageType = 'Product';
-    const sku = getSkuFromUrl();
-    window.getProductPromise = getProduct(sku);
+    extractProductPageData();
 
     preloadFile('/scripts/__dropins__/storefront-pdp/containers/ProductDetails.js', 'script');
     preloadFile('/scripts/__dropins__/storefront-pdp/api.js', 'script');
     preloadFile('/scripts/__dropins__/storefront-pdp/render.js', 'script');
     preloadFile('/scripts/__dropins__/storefront-pdp/chunks/initialize.js', 'script');
     preloadFile('/scripts/__dropins__/storefront-pdp/chunks/getRefinedProduct.js', 'script');
+
+    main.innerHTML = '';
+    const wrapper = document.createElement('div');
+    const block = buildBlock('product-details', '');
+    wrapper.append(block);
+
+    const recommendations = buildBlock('product-recommendations', '');
+    wrapper.append(recommendations);
+    main.append(wrapper);
   } else if (document.body.querySelector('main .product-details-custom')) {
     pageType = 'Product';
     preloadFile('/scripts/preact.js', 'script');
@@ -202,7 +214,6 @@ async function loadEager(doc) {
     });
   }
 
-  const main = doc.querySelector('main');
   if (main) {
     decorateMain(main);
     document.body.classList.add('appear');
