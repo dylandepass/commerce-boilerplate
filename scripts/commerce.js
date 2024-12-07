@@ -425,7 +425,7 @@ export function extractProductPageData() {
       });
     } else {
       const [, valueId, valueTitle, value, selected, valueInStock] = cells;
-      if (options.length > 0) {
+      if (valueId && options.length > 0) {
         options[options.length - 1].values.push({
           id: valueId,
           title: valueTitle,
