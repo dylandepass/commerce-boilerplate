@@ -2,8 +2,9 @@ import XLSX from 'xlsx';
 import fs from 'fs';
 import he from 'he';
 import productSearchQuery from './queries/products.graphql.js';
+import { variantsFragment } from './queries/variants.graphql.js';
 
-const basePath = 'https://main--aem-boilerplate-commerce--hlxsites.hlx.live';
+const basePath = 'https://www.aemshop.net';
 const configFile = `${basePath}/configs.json?sheet=prod`;
 
 
@@ -19,13 +20,14 @@ async function performCatalogServiceQuery(config, query, variables) {
   };
 
   const apiCall = new URL(config['commerce-endpoint']);
-  apiCall.searchParams.append('query', query.replace(/(?:\r\n|\r|\n|\t|[\s]{4})/g, ' ')
-    .replace(/\s\s+/g, ' '));
-  apiCall.searchParams.append('variables', variables ? JSON.stringify(variables) : null);
 
   const response = await fetch(apiCall, {
-    method: 'GET',
+    method: 'POST',
     headers,
+    body: JSON.stringify({
+      query: query.replace(/(?:\r\n|\r|\n|\t|[\s]{4})/g, ' ').replace(/\s\s+/g, ' '),
+      variables,
+    }),
   });
 
   if (!response.ok) {
@@ -35,6 +37,58 @@ async function performCatalogServiceQuery(config, query, variables) {
   const queryResponse = await response.json();
 
   return queryResponse.data;
+}
+
+function getJsonLd(product, { variants }) {
+  const amount = product.priceRange?.minimum?.final?.amount || product.price?.final?.amount;
+  const brand = product.attributes.find((attr) => attr.name === 'brand');
+
+  const schema = {
+    '@context': 'http://schema.org',
+    '@type': 'Product',
+    name: product.name,
+    description: product.meta_description,
+    image: product['og:image'],
+    offers: [],
+    productID: product.sku,
+    sku: product.sku,
+    url: product.path,
+    '@id': product.path,
+  };
+
+  if (brand?.value) {
+    product.brand = {
+      '@type': 'Brand',
+        name: brand?.value,
+    };
+  }
+
+  if (variants.length <= 1) {
+    // simple products
+    if (amount?.value && amount?.currency) {
+      schema.offers.push({
+        '@type': 'Offer',
+        price: amount?.value,
+        priceCurrency: amount?.currency,
+        availability: product.inStock ? 'http://schema.org/InStock' : 'http://schema.org/OutOfStock',
+      });
+    }
+  } else {
+    // complex products
+    variants.forEach((variant) => {
+      schema.offers.push({
+        '@type': 'Offer',
+        name: variant.product.name,
+        image: variant.product.images[0]?.url,
+        price: variant.product.price.final.amount.value,
+        priceCurrency: variant.product.price.final.amount.currency,
+        availability: variant.product.inStock ? 'http://schema.org/InStock' : 'http://schema.org/OutOfStock',
+        sku: variant.product.sku
+      });
+    })
+  }
+
+  return JSON.stringify(schema);
 }
 
 /**
@@ -59,8 +113,9 @@ const getProducts = async (config, pageNumber) => {
         metaTitle,
         description,
         shortDescription,
+        lastModifiedAt,
       } = item.productView;
-      const { url: imageUrl } = item.product.image ?? {};
+      const { url: imageUrl } = item.productView.images?.[0] ?? { url: '' };
 
       let baseImageUrl = imageUrl;
       if (baseImageUrl.startsWith('//')) {
@@ -90,12 +145,16 @@ const getProducts = async (config, pageNumber) => {
           meta_description: finalDescription,
           'og:image': baseImageUrl,
           'og:image:secure_url': baseImageUrl,
+          'last-modified': lastModifiedAt,
         },
       };
     }));
     const totalPages = response.productSearch.page_info.total_pages;
     const currentPage = response.productSearch.page_info.current_page;
     console.log(`Retrieved page ${currentPage} of ${totalPages} pages`);
+
+    await addVariantsToProducts(products, config);
+
     if (currentPage !== totalPages) {
       return [...products, ...(await getProducts(config, currentPage + 1))];
     }
@@ -103,6 +162,29 @@ const getProducts = async (config, pageNumber) => {
   }
   return [];
 };
+
+async function addVariantsToProducts(products, config) {
+  const query = `
+  query Q {
+      ${products.map((product, i) => {
+        return `
+        item_${i}: variants(sku: "${product.productView.sku}") {
+          ...ProductVariant
+        }
+        `  
+      }).join('\n')}
+    }${variantsFragment}`;
+
+  const response = await performCatalogServiceQuery(config, query, null);
+
+  if (!response) {
+    throw new Error('Could not fetch variants');
+  }
+
+  products.forEach((product, i) => {
+    product.variants = response[`item_${i}`];
+  });
+}
 
 (async () => {
   const config = {};
@@ -130,21 +212,25 @@ const getProducts = async (config, pageNumber) => {
       'og:url',
       'og:image',
       'og:image:secure_url',
+      'last-modified',
+      'json-ld',
     ],
   ];
-  products.forEach(({ productView: metaData }) => {
+  products.forEach(({ productView: metaData, variants }) => {
     data.push(
       [
         metaData.path, // URL
         metaData.meta_title, // title
         metaData.meta_description, // description
         metaData.meta_keyword, // keywords
-        'og:product', // og:type
+        'product', // og:type
         metaData.meta_title, // og:title
         metaData.meta_description, // og:description
         `${basePath}${metaData.path}`, // og:url
         metaData['og:image'], // og:image
         metaData['og:image:secure_url'], // og:image:secure_url
+        metaData['last-modified'], // last-modified header
+        getJsonLd(metaData, variants), // json-ld
       ],
     );
   });

@@ -5,8 +5,16 @@ This project boilerplate is for Edge Delivery Services projects that integrate w
 https://experienceleague.adobe.com/developer/commerce/storefront/
 
 ## Environments
-- Preview: https://main--{repo}--{owner}.hlx.page/
-- Live: https://main--{repo}--{owner}.hlx.live/
+- Preview: https://main--{repo}--{owner}.aem.page/
+- Live: https://main--{repo}--{owner}.aem.live/
+
+## Documentation
+
+Before using the aem-boilerplate, we recommand you to go through the documentation on https://www.aem.live/docs/ and more specifically:
+1. [Developer Tutorial](https://www.aem.live/developer/tutorial)
+2. [The Anatomy of a Project](https://www.aem.live/developer/anatomy-of-a-project)
+3. [Web Performance](https://www.aem.live/developer/keeping-it-100)
+4. [Markup, Sections, Blocks, and Auto Blocking](https://www.aem.live/developer/markup-sections-blocks)
 
 ## Installation
 
