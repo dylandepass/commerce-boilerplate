@@ -8,7 +8,10 @@ import ProductDetails from '@dropins/storefront-pdp/containers/ProductDetails.js
 
 // Libs
 import {
-  loadErrorPage,
+  getProduct,
+  getSkuFromUrl,
+  setJsonLd,
+  loadErrorPage, performCatalogServiceQuery, variantsQuery,
 } from '../../scripts/commerce.js';
 import { fetchPlaceholders } from '../../scripts/aem.js';
 
@@ -18,6 +21,103 @@ async function addToCart({
   const { cartApi } = await import('../../../scripts/minicart/api.js');
 
   return cartApi.addToCart(sku, optionsUIDs, quantity, product);
+}
+
+async function setJsonLdProduct(product) {
+  const {
+    name, inStock, description, sku, urlKey, price, priceRange, images, attributes,
+  } = product;
+  const amount = priceRange?.minimum?.final?.amount || price?.final?.amount;
+  const brand = attributes.find((attr) => attr.name === 'brand');
+
+  // get variants
+  const { variants } = (await performCatalogServiceQuery(variantsQuery, { sku }))?.variants
+    || { variants: [] };
+
+  const ldJson = {
+    '@context': 'http://schema.org',
+    '@type': 'Product',
+    name,
+    description,
+    image: images[0]?.url,
+    offers: [],
+    productID: sku,
+    brand: {
+      '@type': 'Brand',
+      name: brand?.value,
+    },
+    url: new URL(`/products/${urlKey}/${sku}`, window.location),
+    sku,
+    '@id': new URL(`/products/${urlKey}/${sku}`, window.location),
+  };
+
+  if (variants.length > 1) {
+    ldJson.offers.push(...variants.map((variant) => ({
+      '@type': 'Offer',
+      name: variant.product.name,
+      image: variant.product.images[0]?.url,
+      price: variant.product.price.final.amount.value,
+      priceCurrency: variant.product.price.final.amount.currency,
+      availability: variant.product.inStock ? 'http://schema.org/InStock' : 'http://schema.org/OutOfStock',
+      sku: variant.product.sku,
+    })));
+  } else {
+    ldJson.offers.push({
+      '@type': 'Offer',
+      price: amount?.value,
+      priceCurrency: amount?.currency,
+      availability: inStock ? 'http://schema.org/InStock' : 'http://schema.org/OutOfStock',
+    });
+  }
+
+  setJsonLd(ldJson, 'product');
+}
+
+function createMetaTag(property, content, type) {
+  if (!property || !type) {
+    return;
+  }
+  let meta = document.head.querySelector(`meta[${type}="${property}"]`);
+  if (meta) {
+    if (!content) {
+      meta.remove();
+      return;
+    }
+    meta.setAttribute(type, property);
+    meta.setAttribute('content', content);
+    return;
+  }
+  if (!content) {
+    return;
+  }
+  meta = document.createElement('meta');
+  meta.setAttribute(type, property);
+  meta.setAttribute('content', content);
+  document.head.appendChild(meta);
+}
+
+function setMetaTags(product) {
+  if (!product) {
+    return;
+  }
+
+  const price = product.priceRange
+    ? product.priceRange.minimum.final.amount : product.price.final.amount;
+
+  createMetaTag('title', product.metaTitle || product.name, 'name');
+  createMetaTag('description', product.metaDescription, 'name');
+  createMetaTag('keywords', product.metaKeyword, 'name');
+
+  createMetaTag('og:type', 'product', 'property');
+  createMetaTag('og:description', product.shortDescription, 'property');
+  createMetaTag('og:title', product.metaTitle || product.name, 'property');
+  createMetaTag('og:url', window.location.href, 'property');
+  const mainImage = product?.images?.filter((image) => image.roles.includes('thumbnail'))[0];
+  const metaImage = mainImage?.url || product?.images[0]?.url;
+  createMetaTag('og:image', metaImage, 'property');
+  createMetaTag('og:image:secure_url', metaImage, 'property');
+  createMetaTag('product:price:amount', price.value, 'property');
+  createMetaTag('product:price:currency', price.currency, 'property');
 }
 
 export default async function decorate(block) {
@@ -31,40 +131,7 @@ export default async function decorate(block) {
 
   const langDefinitions = {
     default: {
-      PDP: {
-        Product: {
-          Incrementer: { label: placeholders.pdpProductIncrementer },
-          OutOfStock: { label: placeholders.pdpProductOutofstock },
-          AddToCart: { label: placeholders.pdpProductAddtocart },
-          Details: { label: placeholders.pdpProductDetails },
-          RegularPrice: { label: placeholders.pdpProductRegularprice },
-          SpecialPrice: { label: placeholders.pdpProductSpecialprice },
-          PriceRange: {
-            From: { label: placeholders.pdpProductPricerangeFrom },
-            To: { label: placeholders.pdpProductPricerangeTo },
-          },
-          Image: { label: placeholders.pdpProductImage },
-        },
-        Swatches: {
-          Required: { label: placeholders.pdpSwatchesRequired },
-        },
-        Carousel: {
-          label: placeholders.pdpCarousel,
-          Next: { label: placeholders.pdpCarouselNext },
-          Previous: { label: placeholders.pdpCarouselPrevious },
-          Slide: { label: placeholders.pdpCarouselSlide },
-          Controls: {
-            label: placeholders.pdpCarouselControls,
-            Button: { label: placeholders.pdpCarouselControlsButton },
-          },
-        },
-        Overlay: {
-          Close: { label: placeholders.pdpOverlayClose },
-        },
-      },
-      Custom: {
-        AddingToCart: { label: placeholders.pdpCustomAddingtocart },
-      },
+      ...placeholders,
     },
   };
 

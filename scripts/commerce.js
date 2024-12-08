@@ -82,9 +82,38 @@ export const productDetailQuery = `query ProductQuery($sku: String!) {
           id
           title
           inStock
+          __typename
           ...on ProductViewOptionValueSwatch {
             type
             value
+          }
+          ... on ProductViewOptionValueProduct {
+            title
+            quantity
+            isDefault
+            product {
+              sku
+              shortDescription
+              metaDescription
+              metaKeyword
+              metaTitle
+              name
+              price {
+                final {
+                  amount {
+                    value
+                    currency
+                  }
+                }
+                regular {
+                  amount {
+                    value
+                    currency
+                  }
+                }
+                roles
+              }
+            }
           }
         }
       }
@@ -100,6 +129,28 @@ export const productDetailQuery = `query ProductQuery($sku: String!) {
   }
 }
 ${priceFieldsFragment}`;
+
+export const variantsQuery = `
+query($sku: String!) {
+  variants(sku: $sku) {
+    variants {
+      product {
+        sku
+        name
+        inStock
+        images(roles: ["image"]) {
+          url
+        }
+        ...on SimpleProductView {
+          price {
+            final { amount { currency value } }
+          }
+        }
+      }
+    }
+  }
+}
+`;
 
 /* Common functionality */
 
@@ -211,7 +262,7 @@ export function renderPrice(product, format, html = (strings, ...values) => stri
 
     if (finalMin.amount.value !== regularMin.amount.value) {
       return html`<${Fragment}>
-      <span class="price-final">${format(finalMin.amount.value)} - ${format(regularMin.amount.value)}</span> 
+      <span class="price-final">${format(finalMin.amount.value)} - ${format(regularMin.amount.value)}</span>
     </${Fragment}>`;
     }
 
@@ -332,164 +383,32 @@ export async function loadErrorPage(code = 404) {
     });
 }
 
-function computePriceRange(variants, currency = 'USD') {
-  const finalPrices = variants.map((v) => v.finalPrice);
-  const regularPrices = variants.map((v) => v.regularPrice);
-
-  const minFinal = Math.min(...finalPrices);
-  const maxFinal = Math.max(...finalPrices);
-  const minRegular = Math.min(...regularPrices);
-  const maxRegular = Math.max(...regularPrices);
+export function mapProductAcdl(product) {
+  const regularPrice = product?.priceRange?.minimum?.regular?.amount.value
+    || product?.price?.regular?.amount.value || 0;
+  const specialPrice = product?.priceRange?.minimum?.final?.amount.value
+    || product?.price?.final?.amount.value;
+  // storefront-events-collector will use storefrontInstanceContext.storeViewCurrencyCode
+  // if undefined, no default value is necessary.
+  const currencyCode = product?.priceRange?.minimum?.final?.amount.currency
+    || product?.price?.final?.amount.currency || undefined;
+  const minimalPrice = product?.priceRange ? regularPrice : undefined;
+  const maximalPrice = product?.priceRange
+    ? product?.priceRange?.maximum?.regular?.amount.value : undefined;
 
   return {
-    maximum: {
-      final: {
-        amount: {
-          value: maxFinal,
-          currency,
-        },
-      },
-      regular: {
-        amount: {
-          value: maxRegular,
-          currency,
-        },
-      },
-      roles: ['visible'],
+    productId: parseInt(product.externalId, 10) || 0,
+    name: product?.name,
+    sku: product?.variantSku || product?.sku,
+    topLevelSku: product?.sku,
+    pricing: {
+      regularPrice,
+      minimalPrice,
+      maximalPrice,
+      specialPrice,
+      currencyCode,
     },
-    minimum: {
-      final: {
-        amount: {
-          value: minFinal,
-          currency,
-        },
-      },
-      regular: {
-        amount: {
-          value: minRegular,
-          currency,
-        },
-      },
-      roles: ['visible'],
-    },
-  };
-}
-
-export function extractProductPageData() {
-  const sku = getMetadata('sku').toUpperCase();
-
-  const nameElement = document.querySelector('h1');
-  const name = nameElement ? nameElement.textContent.trim() : '';
-
-  const descriptionParagraphs = document.querySelectorAll('main > div > p');
-  const description = Array.from(descriptionParagraphs).map((paragraph) => paragraph.innerHTML).join('<br/>');
-
-  const stockMetaTag = document.querySelector('meta[name="instock"]');
-  const inStock = stockMetaTag ? stockMetaTag.getAttribute('content') : '';
-
-  const attributes = Array.from(document.querySelectorAll('.product-attributes > div')).map((attributeRow) => {
-    const cells = attributeRow.querySelectorAll(':scope > div');
-    const [attributeName, attributeLabel, attributeValue] = Array.from(cells)
-      .map((cell) => cell.textContent.trim());
-    return { name: attributeName, label: attributeLabel, value: attributeValue };
-  });
-
-  const images = Array.from(document.querySelectorAll('.product-images img')).map((img) => {
-    let src = img.getAttribute('src') || '';
-    const alt = img.getAttribute('alt') || '';
-    if (src.startsWith('.')) {
-      src = `${window.location.origin}${src.slice(1)}`;
-    }
-    return { url: src, label: alt };
-  });
-
-  const categories = Array.from(document.querySelectorAll('.product-categories > div')).map((categoryRow) => {
-    const cells = categoryRow.querySelectorAll(':scope > div');
-    const [level, urlKey, urlPath] = Array.from(cells).map((cell) => cell.textContent.trim());
-    return { level, urlKey, urlPath };
-  });
-
-  const options = [];
-  Array.from(document.querySelectorAll('.product-options > div')).forEach((optionRow) => {
-    const cells = Array.from(optionRow.querySelectorAll(':scope > div')).map((cell) => cell.textContent.trim());
-    if (cells[0].toLowerCase() !== 'option') {
-      const [id, title, typeName, type, multiple, required] = cells;
-      options.push({
-        id,
-        title,
-        typeName,
-        type,
-        multiple,
-        required,
-        values: [],
-      });
-    } else {
-      const [, valueId, valueTitle, value, selected, valueInStock] = cells;
-      if (valueId && options.length > 0) {
-        options[options.length - 1].values.push({
-          id: valueId,
-          title: valueTitle,
-          value,
-          selected,
-          inStock: valueInStock,
-        });
-      }
-    }
-  });
-
-  const variants = Array.from(document.querySelectorAll('.product-variants > div')).map((variantRow) => {
-    const columns = Array.from(variantRow.querySelectorAll(':scope > div')).map((col) => col.textContent.trim());
-
-    const regularPriceMatch = columns[4]?.match(/[\d.]+/);
-    const finalPriceMatch = columns[5]?.match(/[\d.]+/);
-
-    const variant = {
-      sku: columns[0] || '',
-      name: columns[1] || '',
-      description: columns[2] || '',
-      stockStatus: columns[3] || '',
-      regularPrice: regularPriceMatch ? parseFloat(regularPriceMatch[0]) : 0,
-      finalPrice: finalPriceMatch ? parseFloat(finalPriceMatch[0]) : 0,
-      image: null,
-      selections: columns[7] ? columns[7].split(',').map((selection) => selection.trim()) : [],
-    };
-
-    const pictureElement = variantRow.querySelector(':scope > div:nth-child(7) picture');
-    if (pictureElement) {
-      const sources = Array.from(pictureElement.querySelectorAll('source')).map((source) => ({
-        type: source.getAttribute('type') || '',
-        srcset: source.getAttribute('srcset') || '',
-        media: source.getAttribute('media') || '',
-      }));
-      const imgElement = pictureElement.querySelector('img');
-      if (imgElement) {
-        variant.image = {
-          sources,
-          img: {
-            src: imgElement.getAttribute('src') || '',
-            alt: imgElement.getAttribute('alt') || '',
-            width: imgElement.getAttribute('width') || '',
-            height: imgElement.getAttribute('height') || '',
-            loading: imgElement.getAttribute('loading') || '',
-          },
-        };
-      }
-    }
-
-    return variant;
-  });
-
-  const priceRange = computePriceRange(variants);
-  window.product = {
-    sku,
-    name,
-    description,
-    priceRange,
-    inStock,
-    attributes,
-    images,
-    categories,
-    options,
-    variants,
+    canonicalUrl: new URL(`/products/${product.urlKey}/${product.sku}`, window.location.origin).toString(),
+    mainImageUrl: product?.images?.[0]?.url,
   };
 }

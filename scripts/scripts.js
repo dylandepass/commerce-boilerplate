@@ -164,7 +164,7 @@ async function loadEager(doc) {
     main.append(wrapper);
   } else if (document.body.querySelector('main .product-details-custom')) {
     pageType = 'Product';
-    preloadFile('/scripts/preact.js', 'script');
+    preloadFile('/scripts/__dropins__/tools/preact.js', 'script');
     preloadFile('/scripts/htm.js', 'script');
     preloadFile('/blocks/product-details-custom/ProductDetailsCarousel.js', 'script');
     preloadFile('/blocks/product-details-custom/ProductDetailsSidebar.js', 'script');
@@ -194,25 +194,27 @@ async function loadEager(doc) {
     pageType = 'Checkout';
   }
 
-  window.adobeDataLayer.push({
-    pageContext: {
-      pageType,
-      pageName: document.title,
-      eventType: 'visibilityHidden',
-      maxXOffset: 0,
-      maxYOffset: 0,
-      minXOffset: 0,
-      minYOffset: 0,
+  window.adobeDataLayer.push(
+    {
+      pageContext: {
+        pageType,
+        pageName: document.title,
+        eventType: 'visibilityHidden',
+        maxXOffset: 0,
+        maxYOffset: 0,
+        minXOffset: 0,
+        minYOffset: 0,
+      },
     },
-    shoppingCartContext: {
-      totalQuantity: 0,
+    {
+      shoppingCartContext: {
+        totalQuantity: 0,
+      },
     },
+  );
+  window.adobeDataLayer.push((dl) => {
+    dl.push({ event: 'page-view', eventInfo: { ...dl.getState() } });
   });
-  if (pageType !== 'Product') {
-    window.adobeDataLayer.push((dl) => {
-      dl.push({ event: 'page-view', eventInfo: { ...dl.getState() } });
-    });
-  }
 
   if (main) {
     decorateMain(main);
@@ -221,8 +223,6 @@ async function loadEager(doc) {
   }
 
   events.emit('eds/lcp', true);
-
-  sampleRUM.enhance();
 
   try {
     /* if desktop (proxy for fast connection) or fonts already loaded, load fonts.css */
