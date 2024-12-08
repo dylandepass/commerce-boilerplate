@@ -13,7 +13,6 @@ import {
   setJsonLd,
   loadErrorPage, performCatalogServiceQuery, variantsQuery,
 } from '../../scripts/commerce.js';
-import { getConfigValue } from '../../scripts/configs.js';
 import { fetchPlaceholders } from '../../scripts/aem.js';
 
 async function addToCart({
@@ -122,13 +121,9 @@ function setMetaTags(product) {
 }
 
 export default async function decorate(block) {
-  if (!window.getProductPromise) {
-    window.getProductPromise = getProduct(this.props.sku);
-  }
+  const placeholders = await fetchPlaceholders();
 
-  const [product, placeholders] = await Promise.all([
-    window.getProductPromise, fetchPlaceholders()]);
-
+  const { product } = window;
   if (!product) {
     await loadErrorPage();
     return Promise.reject();
@@ -152,28 +147,34 @@ export default async function decorate(block) {
     models,
   });
 
-  // Set Fetch Endpoint (Service)
-  productApi.setEndpoint(await getConfigValue('commerce-endpoint'));
-
-  // Set Fetch Headers (Service)
-  productApi.setFetchGraphQlHeaders({
-    'Content-Type': 'application/json',
-    'Magento-Environment-Id': await getConfigValue('commerce-environment-id'),
-    'Magento-Website-Code': await getConfigValue('commerce-website-code'),
-    'Magento-Store-View-Code': await getConfigValue('commerce-store-view-code'),
-    'Magento-Store-Code': await getConfigValue('commerce-store-code'),
-    'Magento-Customer-Group': await getConfigValue('commerce-customer-group'),
-    'x-api-key': await getConfigValue('commerce-x-api-key'),
-  });
-
   events.on('eds/lcp', () => {
     if (!product) {
       return;
     }
 
-    setJsonLdProduct(product);
-    setMetaTags(product);
     document.title = product.name;
+    window.adobeDataLayer.push((dl) => {
+      dl.push({
+        productContext: {
+          productId: parseInt(product.externalId, 10) || 0,
+          ...product,
+        },
+      });
+      dl.push({ event: 'product-page-view', eventInfo: { ...dl.getState() } });
+    });
+
+    document.querySelectorAll('.dropin-picker__select').forEach((select) => {
+      const newElement = select.cloneNode(true);
+      select.parentNode.replaceChild(newElement, select);
+
+      newElement.addEventListener('change', (event) => {
+        const { value } = event.target;
+        const url = new URL(window.location);
+
+        url.searchParams.set('optionUIDs', value);
+        window.history.replaceState({}, '', url);
+      });
+    });
   }, { eager: true });
 
   // Render Containers
@@ -181,7 +182,7 @@ export default async function decorate(block) {
     setTimeout(async () => {
       try {
         await productRenderer.render(ProductDetails, {
-          sku: getSkuFromUrl(),
+          sku: product.sku,
           carousel: {
             controls: {
               desktop: 'thumbnailsColumn',

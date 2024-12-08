@@ -1,4 +1,5 @@
 /* eslint-disable import/prefer-default-export, import/no-cycle */
+import { getMetadata } from './aem.js';
 import { getConfigValue } from './configs.js';
 import { getConsent } from './scripts.js';
 
@@ -409,5 +410,167 @@ export function mapProductAcdl(product) {
     },
     canonicalUrl: new URL(`/products/${product.urlKey}/${product.sku}`, window.location.origin).toString(),
     mainImageUrl: product?.images?.[0]?.url,
+  };
+}
+
+function computePriceRange(variants, currency = 'USD') {
+  const finalPrices = variants.map((v) => v.finalPrice);
+  const regularPrices = variants.map((v) => v.regularPrice);
+
+  const minFinal = Math.min(...finalPrices);
+  const maxFinal = Math.max(...finalPrices);
+  const minRegular = Math.min(...regularPrices);
+  const maxRegular = Math.max(...regularPrices);
+
+  return {
+    maximum: {
+      final: {
+        amount: {
+          value: maxFinal,
+          currency,
+        },
+      },
+      regular: {
+        amount: {
+          value: maxRegular,
+          currency,
+        },
+      },
+      roles: ['visible'],
+    },
+    minimum: {
+      final: {
+        amount: {
+          value: minFinal,
+          currency,
+        },
+      },
+      regular: {
+        amount: {
+          value: minRegular,
+          currency,
+        },
+      },
+      roles: ['visible'],
+    },
+  };
+}
+
+export function extractProductPageData() {
+  const sku = getMetadata('sku').toUpperCase();
+
+  const nameElement = document.querySelector('h1');
+  const name = nameElement ? nameElement.textContent.trim() : '';
+
+  const descriptionParagraphs = document.querySelectorAll('main > div > p');
+  const description = Array.from(descriptionParagraphs).map((paragraph) => paragraph.innerHTML).join('<br/>');
+
+  const stockMetaTag = document.querySelector('meta[name="instock"]');
+  const inStock = stockMetaTag ? stockMetaTag.getAttribute('content') : '';
+
+  const attributes = Array.from(document.querySelectorAll('.product-attributes > div')).map((attributeRow) => {
+    const cells = attributeRow.querySelectorAll(':scope > div');
+    const [attributeName, attributeLabel, attributeValue] = Array.from(cells)
+      .map((cell) => cell.textContent.trim());
+    return { name: attributeName, label: attributeLabel, value: attributeValue };
+  });
+
+  const images = Array.from(document.querySelectorAll('.product-images img')).map((img) => {
+    let src = img.getAttribute('src') || '';
+    const alt = img.getAttribute('alt') || '';
+    if (src.startsWith('.')) {
+      src = `${window.location.origin}${src.slice(1)}`;
+    }
+    return { url: src, label: alt };
+  });
+
+  const categories = Array.from(document.querySelectorAll('.product-categories > div')).map((categoryRow) => {
+    const cells = categoryRow.querySelectorAll(':scope > div');
+    const [level, urlKey, urlPath] = Array.from(cells).map((cell) => cell.textContent.trim());
+    return { level, urlKey, urlPath };
+  });
+
+  const options = [];
+  Array.from(document.querySelectorAll('.product-options > div')).forEach((optionRow) => {
+    const cells = Array.from(optionRow.querySelectorAll(':scope > div')).map((cell) => cell.textContent.trim());
+    if (cells[0].toLowerCase() !== 'option') {
+      const [id, title, typeName, type, multiple, required] = cells;
+      options.push({
+        id,
+        title,
+        typeName,
+        type,
+        multiple,
+        required,
+        values: [],
+      });
+    } else {
+      const [, valueId, valueTitle, value, selected, valueInStock] = cells;
+      if (valueId && options.length > 0) {
+        options[options.length - 1].values.push({
+          id: valueId,
+          title: valueTitle,
+          value,
+          selected,
+          inStock: valueInStock,
+        });
+      }
+    }
+  });
+
+  const variants = Array.from(document.querySelectorAll('.product-variants > div')).map((variantRow) => {
+    const columns = Array.from(variantRow.querySelectorAll(':scope > div')).map((col) => col.textContent.trim());
+
+    const regularPriceMatch = columns[4]?.match(/[\d.]+/);
+    const finalPriceMatch = columns[5]?.match(/[\d.]+/);
+
+    const variant = {
+      sku: columns[0] || '',
+      name: columns[1] || '',
+      description: columns[2] || '',
+      stockStatus: columns[3] || '',
+      regularPrice: regularPriceMatch ? parseFloat(regularPriceMatch[0]) : 0,
+      finalPrice: finalPriceMatch ? parseFloat(finalPriceMatch[0]) : 0,
+      image: null,
+      selections: columns[7] ? columns[7].split(',').map((selection) => selection.trim()) : [],
+    };
+
+    const pictureElement = variantRow.querySelector(':scope > div:nth-child(7) picture');
+    if (pictureElement) {
+      const sources = Array.from(pictureElement.querySelectorAll('source')).map((source) => ({
+        type: source.getAttribute('type') || '',
+        srcset: source.getAttribute('srcset') || '',
+        media: source.getAttribute('media') || '',
+      }));
+      const imgElement = pictureElement.querySelector('img');
+      if (imgElement) {
+        variant.image = {
+          sources,
+          img: {
+            src: imgElement.getAttribute('src') || '',
+            alt: imgElement.getAttribute('alt') || '',
+            width: imgElement.getAttribute('width') || '',
+            height: imgElement.getAttribute('height') || '',
+            loading: imgElement.getAttribute('loading') || '',
+          },
+        };
+      }
+    }
+
+    return variant;
+  });
+
+  const priceRange = computePriceRange(variants);
+  window.product = {
+    sku,
+    name,
+    description,
+    priceRange,
+    inStock,
+    attributes,
+    images,
+    categories,
+    options,
+    variants,
   };
 }
